@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "php",
+  "packages": {
+    "node": "22"
+  },
+  "steps": {
+    "build": {
+      "commands": [
+        "...",
+        "cd casino && composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction",
+        "cd casino && npm ci && npm run build"
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "sh railway-start.sh"
+  }
+}

@@ -1,6 +1,10 @@
 <?php
 use Illuminate\Support\Facades\Route;
 
+// Railway uses this endpoint to verify that the web process is accepting
+// requests. It deliberately bypasses the site middleware and database work.
+Route::get('/health', static fn () => response()->json(['status' => 'ok']));
+
 Route::namespace ('Frontend')->middleware(['siteisclosed', 'checker'])->group(function ()
 {
 
