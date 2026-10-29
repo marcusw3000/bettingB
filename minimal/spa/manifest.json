@@ -1,0 +1,11 @@
+{
+  "resources/spa/main.js": {
+    "file": "app.Cgys0OrM.js",
+    "name": "main",
+    "src": "resources/spa/main.js",
+    "isEntry": true,
+    "css": [
+      "assets/main.C8fkPErx.css"
+    ]
+  }
+}
