@@ -34,5 +34,12 @@ return [
             'website_name' => env('XTO_PAY_WEBSITE_NAME', 'one'),
             'allowed_methods' => env('XTO_PAY_METHODS', 'TRC20_USDT,POLYGON_USDT,BSC_USDT,ERC20_USDT,POLYGON_USDC,BSC_USDC,ERC20_USDC'),
         ],
+        'pushinpay' => [
+            'enabled' => env('PUSHINPAY_ENABLED', false),
+            'token' => env('PUSHINPAY_TOKEN', ''),
+            'base_url' => env('PUSHINPAY_BASE_URL', 'https://api.pushinpay.com.br/api'),
+            // Optional token configured in the PushinPay dashboard's Authorization field.
+            'webhook_token' => env('PUSHINPAY_WEBHOOK_TOKEN', ''),
+        ],
     ],
 ];

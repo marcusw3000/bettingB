@@ -16,6 +16,7 @@ namespace VanguardLTE\Http\Middleware
             '/payment/interkassa/result', 
             '/payment/coinbase/result', 
             '/payment/btcpayserver/result', 
+            'payment/webhook/pushinpay',
             '/sms/callback', 
             '/profile/contact',
             '/refill-coins',

@@ -4,11 +4,13 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use VanguardLTE\Http\Controllers\Controller;
 use VanguardLTE\Services\Payments\BtcpayDriver;
 use VanguardLTE\Services\Payments\PaymentDriverInterface;
+use VanguardLTE\Services\Payments\PushinpayDriver;
 use VanguardLTE\Transaction;
 use VanguardLTE\User;
 
@@ -43,7 +45,7 @@ class TopupController extends Controller
             'user_id' => $user->id,
             'driver' => $driverKey,
             'amount' => $amount,
-            'currency' => $user->shop->currency ?? config('payments.default_currency', 'USD'),
+            'currency' => $driverKey === 'pushinpay' ? 'BRL' : ($user->shop->currency ?? config('payments.default_currency', 'USD')),
             'status' => 'pending',
             'meta' => json_encode([]),
             'created_at' => now(),
@@ -53,7 +55,8 @@ class TopupController extends Controller
         $meta = [
             'intent_id' => $intentId,
             'return_url' => $driverKey === 'paypal' ? route('payment.paypal.return') : url('/'),
-            'currency' => $user->shop->currency ?? config('payments.default_currency', 'USD'),
+            'currency' => $driverKey === 'pushinpay' ? 'BRL' : ($user->shop->currency ?? config('payments.default_currency', 'USD')),
+            'webhook_url' => $driverKey === 'pushinpay' ? route('payment.webhook.pushinpay') : null,
         ];
 
         try {
@@ -65,13 +68,119 @@ class TopupController extends Controller
         DB::table('payment_intents')->where('id', $intentId)->update([
             'external_id' => $invoice['external_id'] ?? null,
             'payment_url' => $invoice['payment_url'] ?? null,
+            'meta' => json_encode($invoice['meta'] ?? []),
             'updated_at' => now(),
         ]);
 
         return response()->json([
             'payment_url' => $invoice['payment_url'] ?? null,
             'intent_id' => $intentId,
+            'payment_data' => $invoice['meta'] ?? null,
         ]);
+    }
+
+    /**
+     * PushinPay has no signed payload in its basic webhook contract. A callback
+     * is therefore accepted only after the transaction is rechecked with the
+     * provider API and the paid value matches the original intent exactly.
+     */
+    public function webhookPushinpay(Request $request)
+    {
+        $config = config('payments.drivers.pushinpay');
+        if (empty($config['enabled']) || empty($config['token'])) {
+            return response()->json(['error' => 'PushinPay desativado'], 404);
+        }
+
+        $webhookToken = (string) ($config['webhook_token'] ?? '');
+        if ($webhookToken !== '' && !hash_equals('Bearer ' . $webhookToken, (string) $request->header('Authorization', ''))) {
+            return response()->json(['error' => 'Não autorizado'], 401);
+        }
+
+        $payload = $request->json()->all();
+        $externalId = (string) ($payload['id'] ?? '');
+        if ($externalId === '') {
+            // The dashboard probes the receiver before persisting a webhook.
+            // A probe has no transaction id and must never change any balance.
+            return response()->json(['ok' => true, 'probe' => true]);
+        }
+
+        if (strtolower((string) ($payload['status'] ?? '')) !== 'paid') {
+            return response()->json(['ok' => true]);
+        }
+
+        try {
+            $providerPayment = Http::acceptJson()
+                ->withToken((string) $config['token'])
+                ->timeout(15)
+                ->get(rtrim((string) $config['base_url'], '/') . '/transaction/' . rawurlencode($externalId));
+        } catch (\Throwable $exception) {
+            report($exception);
+            return response()->json(['error' => 'Falha ao confirmar pagamento'], 503);
+        }
+
+        if (!$providerPayment->successful()) {
+            return response()->json(['error' => 'Pagamento não pôde ser confirmado'], 503);
+        }
+
+        $verified = $providerPayment->json();
+        if (strtolower((string) ($verified['status'] ?? '')) !== 'paid') {
+            return response()->json(['ok' => true]);
+        }
+
+        $result = DB::transaction(function () use ($externalId, $verified) {
+            $intent = DB::table('payment_intents')
+                ->where('driver', 'pushinpay')
+                ->where('external_id', $externalId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$intent || $intent->status === 'paid') {
+                return 'ok';
+            }
+
+            if ((int) ($verified['value'] ?? -1) !== (int) round((float) $intent->amount * 100)) {
+                throw new \RuntimeException('O valor confirmado não corresponde à cobrança.');
+            }
+
+            $user = DB::table('users')->where('id', $intent->user_id)->lockForUpdate()->first();
+            if (!$user) {
+                throw new \RuntimeException('Usuário da cobrança não encontrado.');
+            }
+
+            $creditCoins = $this->calculateCoinsForDeposit((float) $intent->amount);
+            $newBalance = (float) $user->balance + $creditCoins;
+
+            DB::table('users')->where('id', $user->id)->update([
+                'balance' => $newBalance,
+                'updated_at' => now(),
+            ]);
+
+            DB::table('transactions')->insert([
+                'user_id' => $user->id,
+                'admin_id' => null,
+                'direction' => 'payment',
+                'amount' => $creditCoins,
+                'balance_before' => $user->balance,
+                'balance_after' => $newBalance,
+                'source' => 'pushinpay',
+                'note' => 'PIX PushinPay ' . $externalId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            DB::table('payment_intents')->where('id', $intent->id)->update([
+                'status' => 'paid',
+                'meta' => json_encode(array_merge((array) json_decode($intent->meta ?: '{}', true), [
+                    'end_to_end_id' => $verified['end_to_end_id'] ?? null,
+                    'paid_at' => now()->toIso8601String(),
+                ])),
+                'updated_at' => now(),
+            ]);
+
+            return 'credited';
+        });
+
+        return response()->json(['ok' => true, 'status' => $result]);
     }
 
     public function webhookBtcpay(Request $request)
@@ -605,6 +714,14 @@ class TopupController extends Controller
                 return null;
             }
             return new \VanguardLTE\Services\Payments\XtopayDriver($cfg);
+        }
+
+        if ($driver === 'pushinpay') {
+            $cfg = config('payments.drivers.pushinpay');
+            if (empty($cfg['enabled']) || empty($cfg['token'])) {
+                return null;
+            }
+            return new PushinpayDriver($cfg);
         }
 
         return null;

@@ -285,6 +285,8 @@ Route::namespace ('Frontend')->middleware(['siteisclosed', 'checker'])->group(fu
 Route::post('payment/webhook/btcpay', [\VanguardLTE\Http\Controllers\Web\Frontend\TopupController::class, 'webhookBtcpay'])->name('payment.webhook.btcpay');
 Route::post('payment/webhook/stripe', [\VanguardLTE\Http\Controllers\Web\Frontend\TopupController::class, 'webhookStripe'])->name('payment.webhook.stripe');
 Route::post('payment/webhook/xtopay', [\VanguardLTE\Http\Controllers\Web\Frontend\TopupController::class, 'webhookXtopay'])->name('payment.webhook.xtopay');
+Route::post('payment/webhook/pushinpay', [\VanguardLTE\Http\Controllers\Web\Frontend\TopupController::class, 'webhookPushinpay'])->name('payment.webhook.pushinpay');
+Route::get('payment/webhook/pushinpay', static fn () => response()->json(['ok' => true, 'probe' => true]));
 
 
 /**
