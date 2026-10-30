@@ -965,6 +965,7 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
                 'amount' => 'required|numeric|min:' . $minCoins,
                 'method' => 'required|in:pix',
                 'wallet' => 'required|string|max:500',
+                'receiver_document' => 'nullable|string|max:20',
             ], [
                 'amount.min' => 'O saque mínimo é R$ 20,00.',
                 'method.in' => 'Selecione PIX como método de saque.',
@@ -981,6 +982,7 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
             $coins = (float) $request->input('amount');
             $method = trim($request->input('method'));
             $wallet = trim($request->input('wallet'));
+            $receiverDocument = preg_replace('/\D+/', '', (string) $request->input('receiver_document', ''));
 
             $pixKey = preg_replace('/\s+/', '', $wallet);
             $validPixKey = filter_var($pixKey, FILTER_VALIDATE_EMAIL)
@@ -1014,7 +1016,7 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
 
             $fiatAmount = round($coins / $rate, 2);
 
-            return \Illuminate\Support\Facades\DB::transaction(function () use ($user, $coins, $fiatAmount, $method, $wallet, $rate, $request) {
+            return \Illuminate\Support\Facades\DB::transaction(function () use ($user, $coins, $fiatAmount, $method, $wallet, $pixKey, $receiverDocument, $rate, $request) {
                 $lockedUser = \VanguardLTE\User::where('id', $user->id)->lockForUpdate()->first();
                 if ((float) $lockedUser->balance < $coins) {
                     $msg = "Insufficient balance for this cashout request.";
@@ -1052,6 +1054,11 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
                     'method' => $method,
                     'wallet' => $pixKey,
                     'status' => 0, // 0 = Pending
+                    'workflow_status' => 'requested',
+                    'idempotency_key' => (string) \Illuminate\Support\Str::uuid(),
+                    'pix_key_encrypted' => encrypt($pixKey),
+                    'pix_key_fingerprint' => hash('sha256', strtolower($pixKey)),
+                    'receiver_document_encrypted' => $receiverDocument ? encrypt($receiverDocument) : null,
                     'shop_id' => $lockedUser->shop_id ?? 1,
                     'created_at' => now(),
                     'confirmed_at' => now(),

@@ -17,6 +17,8 @@ namespace VanguardLTE
             'shop_id',
             'created_at',
             'confirmed_at'
+            ,'workflow_status','idempotency_key','provider_payout_id','pix_key_encrypted','pix_key_fingerprint',
+            'receiver_document_encrypted','first_approved_by','second_approved_by','approved_at','sent_at','paid_at','failure_reason'
         ];
         public $timestamps = false;
         public static function boot()

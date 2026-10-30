@@ -78,11 +78,30 @@ class WithdrawalController extends Controller
             return redirect()->back()->withErrors('This withdrawal has already been processed.');
         }
 
+        if ((int) $withdrawal->user_id === (int) auth()->id()) {
+            return redirect()->back()->withErrors('Você não pode aprovar o próprio saque.');
+        }
+
+        $dualApprovalLimit = (float) env('CASHOUT_DUAL_APPROVAL_BRL', 500);
+        if ((float) $withdrawal->fiat_amount >= $dualApprovalLimit && !$withdrawal->first_approved_by) {
+            $withdrawal->first_approved_by = auth()->id();
+            $withdrawal->workflow_status = 'awaiting_second_approval';
+            $withdrawal->approved_at = now();
+            $withdrawal->admin_note = 'Primeira aprovação por ' . (auth()->user()->username ?? 'admin');
+            $withdrawal->save();
+            return redirect()->back()->with('success', 'Primeira aprovação registrada. Aguarda segundo administrador.');
+        }
+        if ((float) $withdrawal->fiat_amount >= $dualApprovalLimit && (int) $withdrawal->first_approved_by === (int) auth()->id()) {
+            return redirect()->back()->withErrors('Um segundo administrador deve concluir esta aprovação.');
+        }
+
         $adminNote = $request->input('admin_note', '');
         $txid = $request->input('txid', '');
         $combinedNote = trim(($txid ? "TXID: {$txid}. " : '') . ($adminNote ? "Note: {$adminNote}. " : '') . "Approved by " . (auth()->user()->username ?? 'admin'));
 
         $withdrawal->status = 1; // Approved / Fulfilled
+        $withdrawal->workflow_status = 'approved_manual';
+        $withdrawal->second_approved_by = $withdrawal->first_approved_by ? auth()->id() : null;
         $withdrawal->admin_note = $combinedNote;
         $withdrawal->confirmed_at = now();
         $withdrawal->save();
