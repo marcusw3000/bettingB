@@ -24,7 +24,7 @@ class TopupController extends Controller
     public function create(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'amount' => 'required|numeric|min:0.5|max:1000000',
+            'amount' => 'required|numeric|min:20|max:1000000',
             'driver' => 'nullable|string',
         ]);
 
