@@ -956,16 +956,19 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
 
             $rate = (float) (function_exists('settings') ? settings('coins_per_dollar', 100) : 100);
             if ($rate <= 0) $rate = 100;
-            $minCoins = (float) (function_exists('settings') ? settings('min_cashout_coins', 2000) : 2000);
+            // Cashouts are denominated in BRL. Keep the public minimum fixed at R$20.
+            $minCoins = 20 * $rate;
+            $dailyLimit = (float) env('CASHOUT_DAILY_LIMIT_BRL', 1000);
+            $maxRequestsPerDay = (int) env('CASHOUT_MAX_REQUESTS_PER_DAY', 3);
 
             $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
                 'amount' => 'required|numeric|min:' . $minCoins,
-                'method' => 'required|string|max:100',
+                'method' => 'required|in:pix',
                 'wallet' => 'required|string|max:500',
             ], [
-                'amount.min' => "The minimum cashout limit is " . number_format($minCoins, 0) . " points ($" . number_format($minCoins / $rate, 2) . " USD).",
-                'method.required' => "Please choose a cashout method.",
-                'wallet.required' => "Please enter your destination wallet address, phone number, or account details.",
+                'amount.min' => 'O saque mínimo é R$ 20,00.',
+                'method.in' => 'Selecione PIX como método de saque.',
+                'wallet.required' => 'Informe uma chave PIX válida.',
             ]);
 
             if ($validator->fails()) {
@@ -978,6 +981,28 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
             $coins = (float) $request->input('amount');
             $method = trim($request->input('method'));
             $wallet = trim($request->input('wallet'));
+
+            $pixKey = preg_replace('/\s+/', '', $wallet);
+            $validPixKey = filter_var($pixKey, FILTER_VALIDATE_EMAIL)
+                || preg_match('/^\+?55\d{10,11}$/', preg_replace('/\D+/', '', $pixKey))
+                || preg_match('/^\d{11}$|^\d{14}$/', preg_replace('/\D+/', '', $pixKey))
+                || preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $pixKey);
+            if (!$validPixKey) {
+                $msg = 'Informe uma chave PIX válida (CPF, CNPJ, e-mail, telefone ou chave aleatória).';
+                return $request->expectsJson() || $request->ajax()
+                    ? response()->json(['success' => false, 'message' => $msg], 422)
+                    : redirect()->back()->withErrors([$msg]);
+            }
+
+            $today = now()->startOfDay();
+            $requestCount = \VanguardLTE\Withdraw::where('user_id', $user->id)->where('created_at', '>=', $today)->whereIn('status', [0, 1])->count();
+            $requestedToday = (float) \VanguardLTE\Withdraw::where('user_id', $user->id)->where('created_at', '>=', $today)->whereIn('status', [0, 1])->sum('fiat_amount');
+            if ($requestCount >= $maxRequestsPerDay || $requestedToday + ($coins / $rate) > $dailyLimit) {
+                $msg = 'Limite diário de saque atingido. Tente novamente amanhã.';
+                return $request->expectsJson() || $request->ajax()
+                    ? response()->json(['success' => false, 'message' => $msg], 429)
+                    : redirect()->back()->withErrors([$msg]);
+            }
 
             if ((float) $user->balance < $coins) {
                 $msg = "Insufficient balance. You currently have " . number_format($user->balance, 0) . " points available.";
@@ -1023,9 +1048,9 @@ namespace VanguardLTE\Http\Controllers\Web\Frontend
                     'amount' => $coins,
                     'coin_amount' => $coins,
                     'fiat_amount' => $fiatAmount,
-                    'currency' => 'USD',
+                    'currency' => 'BRL',
                     'method' => $method,
-                    'wallet' => $wallet,
+                    'wallet' => $pixKey,
                     'status' => 0, // 0 = Pending
                     'shop_id' => $lockedUser->shop_id ?? 1,
                     'created_at' => now(),
